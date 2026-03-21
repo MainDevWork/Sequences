@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manager</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <div class="input-group">
+            <input type="text" id="siteInput" placeholder="Enter website or service (e.g., GitHub, Netflix)"
+                autofocus="">
+            <button class="primary" id="generateBtn" onclick="addWithPassword()">Generate &amp; Add</button>
+        </div>
+        <div class="input-group">
+            <input type="text" id="searchInput" placeholder="Search services..." oninput="render()">
+        </div>
+        <div class="input-group">
+            <button class="accent" onclick="enableAddButton()">Load</button>
+            <span id="status"></span>
+        </div>
+        <table id="table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th class="sortable" onclick="toggleSort()">Service</th>
+                    <th>Sequences</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="tbody">
+                <tr>
+                    <td colspan="4" class="empty-state">No sequences saved yet.
+                        <br>
+                        Add your first one above!
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    <script src="script.js"></script>
+</body>
+
+</html>
