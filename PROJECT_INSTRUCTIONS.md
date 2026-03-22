@@ -24,7 +24,12 @@ Sequences/
 
 ## Data Storage
 
-All password data lives in a single CSV file (`passwords-export.csv`). There is NO server, NO API, NO database. The browser reads and writes directly to this file using the File System Access API (`showOpenFilePicker`, `createWritable`).
+All password data lives in a single CSV file (`passwords-export.csv`). The browser writes back to this file using one of two methods:
+
+1. **File System Access API** (`createWritable` on the file handle) — used when the CSV was loaded via the file picker.
+2. **Server POST endpoint** (`POST /save-csv`) — used when the CSV was loaded via `fetch()` from the server. The server writes the CSV body directly to `passwords-export.csv` on disk.
+
+If neither method is available, a download fallback triggers so the user can manually replace the file.
 
 ### CSV Format
 
@@ -341,7 +346,7 @@ Container: `max-width: 1000px`, centered with `margin: 0 auto`.
 ## Key Behaviors to Preserve
 
 1. The "Generate & Add" button starts **disabled** on page load. It only becomes enabled after a successful Load.
-2. Every mutation (add, edit name, new password, delete) immediately writes the full CSV back to the file. There is no "Save" button - persistence is automatic.
+2. Every mutation (add, edit name, new password, delete) immediately writes the full CSV back to the file via the save chain: file handle → server POST → download fallback. There is no "Save" button - persistence is automatic.
 3. Pressing Enter in the service name input triggers "Generate & Add".
 4. The `addEntry()` function exists as a utility that checks for duplicates by case-insensitive service name match. If a duplicate is found, it updates the password instead of creating a new entry. This function is NOT called by the main UI flow (which uses `addWithPassword()`), but it is retained.
 5. When saving fails (e.g., file handle lost), the in-memory change still takes effect - the user sees the change but gets a warning that CSV save failed.
@@ -358,9 +363,16 @@ Container: `max-width: 1000px`, centered with `margin: 0 auto`.
 
 ---
 
+## Server Endpoints
+
+The Node.js server (`server.js`) serves static files and provides one API endpoint:
+
+- **`POST /save-csv`** — Accepts raw CSV text in the request body and writes it to `passwords-export.csv` on disk. Returns `{"ok": true}` on success or `{"error": "..."}` on failure. This allows the browser to save password changes back to the same CSV file without needing the File System Access API.
+
+---
+
 ## What This App Does NOT Have
 
-- No server or backend
 - No database
 - No authentication beyond the prompt-based verification
 - No encryption of the CSV file

@@ -52,18 +52,36 @@ function entriesToCSV() {
 
 async function saveToCSV() {
     const csv = entriesToCSV();
+
+    // Method 1: File System Access API handle (from file picker)
     if (csvFileHandle) {
         try {
             const writable = await csvFileHandle.createWritable();
             await writable.write(csv);
             await writable.close();
-            console.log("CSV file saved successfully.");
+            console.log("CSV file saved successfully via file handle.");
             return true;
         } catch (err) {
             console.error("Error saving CSV via handle:", err);
         }
     }
-    // Fallback: trigger a download
+
+    // Method 2: POST back to the server (when loaded via fetch)
+    try {
+        const response = await fetch('/save-csv', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/csv' },
+            body: csv
+        });
+        if (response.ok) {
+            console.log("CSV file saved successfully via server.");
+            return true;
+        }
+    } catch (err) {
+        console.error("Error saving CSV via server:", err);
+    }
+
+    // Method 3: Fallback download
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
