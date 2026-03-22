@@ -51,49 +51,45 @@ function entriesToCSV() {
 }
 
 async function saveToCSV() {
-    if (!csvFileHandle) {
-        showMsg("No CSV file loaded. Please Load first.");
-        return false;
+    const csv = entriesToCSV();
+    if (csvFileHandle) {
+        try {
+            const writable = await csvFileHandle.createWritable();
+            await writable.write(csv);
+            await writable.close();
+            console.log("CSV file saved successfully.");
+            return true;
+        } catch (err) {
+            console.error("Error saving CSV via handle:", err);
+        }
     }
-    try {
-        const writable = await csvFileHandle.createWritable();
-        await writable.write(entriesToCSV());
-        await writable.close();
-        console.log("CSV file saved successfully.");
-        return true;
-    } catch (err) {
-        console.error("Error saving CSV:", err);
-        showMsg("Failed to save CSV file.");
-        return false;
-    }
+    // Fallback: trigger a download
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'passwords-export.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+    showMsg("CSV downloaded. Replace your existing file with it.");
+    return true;
 }
 
 async function loadFromCSV() {
-    try {
-        const [handle] = await window.showOpenFilePicker({
-            types: [{
-                description: 'CSV File',
-                accept: { 'text/csv': ['.csv'] },
-            }],
-            multiple: false
-        });
-        csvFileHandle = handle;
-        const file = await handle.getFile();
-        const text = await file.text();
-        const parsed = parseCSV(text);
-
-        entries.length = 0;
-        parsed.forEach(item => entries.push(item));
-
-        sortEntries();
-        showMsg(`Successfully loaded ${entries.length} passwords from CSV!`);
-    } catch (err) {
-        if (err.name !== 'AbortError') {
-            console.error("Error loading CSV:", err);
-            showMsg(`Load failed: ${err.message}`);
-        }
-        throw err;
+    const response = await fetch('passwords-export.csv', {
+        cache: 'no-store'
+    });
+    if (!response.ok) {
+        throw new Error(`Could not load CSV file (${response.status})`);
     }
+    const text = await response.text();
+    const parsed = parseCSV(text);
+
+    entries.length = 0;
+    parsed.forEach(item => entries.push(item));
+
+    sortEntries();
+    showMsg(`Successfully loaded ${entries.length} passwords from CSV!`);
 }
 
 function addEntry(site, password) {
@@ -128,7 +124,7 @@ async function addWithPassword() {
 
     if (!confirm("Are you sure you want to generate and add a new service?")) return;
 
-    if (!verifyUserIdentity("Generate & Add")) {
+    if (!await verifyUserIdentity("Generate & Add")) {
         return;
     }
 
@@ -229,18 +225,59 @@ function copyPass(i) {
     showMsg("Password copied!");
 }
 
-function verifyUserIdentity(actionName) {
-    const dream = prompt("What is your biggest dream?");
+function showVerifyPrompt(label) {
+    return new Promise((resolve) => {
+        const overlay = document.getElementById('verifyOverlay');
+        const input = document.getElementById('verifyInput');
+        const labelEl = document.getElementById('verifyLabel');
+        const submitBtn = document.getElementById('verifySubmitBtn');
+        const cancelBtn = document.getElementById('verifyCancelBtn');
+
+        labelEl.textContent = label;
+        input.value = '';
+        overlay.classList.remove('hidden');
+        input.focus();
+
+        function cleanup() {
+            overlay.classList.add('hidden');
+            submitBtn.removeEventListener('click', onSubmit);
+            cancelBtn.removeEventListener('click', onCancel);
+            input.removeEventListener('keypress', onKeypress);
+        }
+
+        function onSubmit() {
+            const val = input.value;
+            cleanup();
+            resolve(val);
+        }
+
+        function onCancel() {
+            cleanup();
+            resolve(null);
+        }
+
+        function onKeypress(e) {
+            if (e.key === 'Enter') onSubmit();
+        }
+
+        submitBtn.addEventListener('click', onSubmit);
+        cancelBtn.addEventListener('click', onCancel);
+        input.addEventListener('keypress', onKeypress);
+    });
+}
+
+async function verifyUserIdentity(actionName) {
+    const dream = await showVerifyPrompt("What is your biggest dream?");
     if (dream === null) {
         showMsg(`${actionName} canceled.`);
         return false;
     }
-    const belief = prompt("What is your belief system?");
+    const belief = await showVerifyPrompt("What is your belief system?");
     if (belief === null) {
         showMsg(`${actionName} canceled.`);
         return false;
     }
-    const dog = prompt("What is the name of your favourite dog?");
+    const dog = await showVerifyPrompt("What is the name of your favourite dog?");
     if (dog === null) {
         showMsg(`${actionName} canceled.`);
         return false;
@@ -267,7 +304,7 @@ async function confirmNewPass(i) {
         return;
     }
 
-    if (verifyUserIdentity("Action")) {
+    if (await verifyUserIdentity("Action")) {
         const newPassword = generatePassword();
         entries[i].password = newPassword;
         entries[i].updatedAt = new Date().toISOString();
@@ -285,7 +322,7 @@ async function confirmNewPass(i) {
 async function editSite(i) {
     if (!confirm("Are you sure you want to edit this service name?")) return;
 
-    if (!verifyUserIdentity("Edit Name")) {
+    if (!await verifyUserIdentity("Edit Name")) {
         return;
     }
 
@@ -313,7 +350,7 @@ async function confirmDelete(i) {
         return;
     }
 
-    if (verifyUserIdentity("Deletion")) {
+    if (await verifyUserIdentity("Deletion")) {
         entries.splice(i, 1);
         render();
 
@@ -403,7 +440,7 @@ document.getElementById('siteInput').addEventListener('keypress', e => {
 
 async function enableAddButton() {
     console.log("Load button clicked.");
-    if (verifyUserIdentity("Load")) {
+    if (await verifyUserIdentity("Load")) {
         console.log("Identity verified. Loading CSV...");
 
         try {
