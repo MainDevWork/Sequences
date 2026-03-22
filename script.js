@@ -1,5 +1,6 @@
 const entries = [];
 let sortDirection = 'asc';
+let csvFileHandle = null;
 
 function generatePassword(len = 20) {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:,.<>?";
@@ -7,13 +8,107 @@ function generatePassword(len = 20) {
     crypto.getRandomValues(array);
     return Array.from(array, byte => chars[byte % chars.length]).join('');
 }
+
+function parseCSV(text) {
+    const lines = text.split(/\r?\n/);
+    const results = [];
+    for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const parts = line.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+        const unquote = s => (s || '').replace(/^"(.*)"$/, '$1').replace(/""/g, '"').trim();
+        const id = unquote(parts[0]);
+        const service = unquote(parts[1]);
+        const password = unquote(parts[2]);
+        const createdAt = unquote(parts[3]);
+        const updatedAt = unquote(parts[4]);
+        if (service && password) {
+            results.push({
+                site: service,
+                password: password,
+                id: id ? Number(id) : undefined,
+                createdAt: createdAt || new Date().toISOString(),
+                updatedAt: updatedAt || new Date().toISOString()
+            });
+        }
+    }
+    return results;
+}
+
+function entriesToCSV() {
+    const esc = s => '"' + String(s).replace(/"/g, '""') + '"';
+    let csv = '"ID","Service","Password","Created At","Updated At"\n';
+    entries.forEach(item => {
+        csv += [
+            esc(item.id || ''),
+            esc(item.site || ''),
+            esc(item.password || ''),
+            esc(item.createdAt || ''),
+            esc(item.updatedAt || '')
+        ].join(',') + '\n';
+    });
+    return csv;
+}
+
+async function saveToCSV() {
+    if (!csvFileHandle) {
+        showMsg("No CSV file loaded. Please Load first.");
+        return false;
+    }
+    try {
+        const writable = await csvFileHandle.createWritable();
+        await writable.write(entriesToCSV());
+        await writable.close();
+        console.log("CSV file saved successfully.");
+        return true;
+    } catch (err) {
+        console.error("Error saving CSV:", err);
+        showMsg("Failed to save CSV file.");
+        return false;
+    }
+}
+
+async function loadFromCSV() {
+    try {
+        const [handle] = await window.showOpenFilePicker({
+            types: [{
+                description: 'CSV File',
+                accept: { 'text/csv': ['.csv'] },
+            }],
+            multiple: false
+        });
+        csvFileHandle = handle;
+        const file = await handle.getFile();
+        const text = await file.text();
+        const parsed = parseCSV(text);
+
+        entries.length = 0;
+        parsed.forEach(item => entries.push(item));
+
+        sortEntries();
+        showMsg(`Successfully loaded ${entries.length} passwords from CSV!`);
+    } catch (err) {
+        if (err.name !== 'AbortError') {
+            console.error("Error loading CSV:", err);
+            showMsg(`Load failed: ${err.message}`);
+        }
+        throw err;
+    }
+}
+
 function addEntry(site, password) {
     const existing = entries.findIndex(e => e.site.toLowerCase() === site.toLowerCase());
     if (existing >= 0) {
         entries[existing].password = password;
+        entries[existing].updatedAt = new Date().toISOString();
         showMsg(`Updated password for: ${site}`);
     } else {
-        entries.push({ site: site.trim(), password });
+        entries.push({
+            site: site.trim(),
+            password,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        });
         showMsg(`Added: ${site}`);
     }
     if (entries.length > 1) {
@@ -22,7 +117,8 @@ function addEntry(site, password) {
         render();
     }
 }
-function addWithPassword() {
+
+async function addWithPassword() {
     const input = document.getElementById('siteInput');
     const site = input.value.trim();
     if (!site) {
@@ -38,7 +134,6 @@ function addWithPassword() {
 
     const pass = generatePassword();
 
-    // Determine next index (highest existing index + 1, or entries.length + 1)
     let nextIndex = 1;
     if (entries.length > 0) {
         const indices = entries.map(e => Number(e.id || 0));
@@ -46,46 +141,26 @@ function addWithPassword() {
         if (nextIndex <= entries.length) nextIndex = entries.length + 1;
     }
 
-    const dataToSend = {
-        Service: site,
-        Password: pass,
-        Index: nextIndex,
-        value: -1
-    };
+    const now = new Date().toISOString();
+    entries.push({
+        site: site.trim(),
+        password: pass,
+        id: nextIndex,
+        createdAt: now,
+        updatedAt: now
+    });
+    sortEntries();
 
-    console.log(`Syncing "${site}" to server via POST (value: -1)...`);
-    fetch('https://n8n.srv1268978.hstgr.cloud/webhook/3edea957-6b00-4595-97ef-825f79ae4d43', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(dataToSend)
-    })
-        .then(response => {
-            if (response.ok) {
-                showMsg(`Successfully synced "${site}" to server!`);
-                input.value = '';
-                input.focus();
-
-                // Add locally
-                entries.push({
-                    site: site.trim(),
-                    password: pass,
-                    id: nextIndex
-                });
-                sortEntries(); // This calls render()
-
-                // Keep button enabled
-                const btn = document.getElementById('generateBtn');
-                if (btn) btn.disabled = false;
-            } else {
-                throw new Error(`Sync failed with status: ${response.status}`);
-            }
-        })
-        .catch(error => {
-            console.error("Error in Generate & Add process:", error);
-            showMsg(error.message || "Sync error.");
-        });
+    const saved = await saveToCSV();
+    if (saved) {
+        showMsg(`Added "${site}" and saved to CSV!`);
+        input.value = '';
+        input.focus();
+        const btn = document.getElementById('generateBtn');
+        if (btn) btn.disabled = false;
+    } else {
+        showMsg(`Added "${site}" locally but CSV save failed.`);
+    }
 }
 
 function toggleSort() {
@@ -120,7 +195,6 @@ function render() {
 
     tbody.innerHTML = '';
 
-    // Filter filteredEntries based on search query
     const filteredEntries = entries.map((entry, index) => ({ entry, index }))
         .filter(item => item.entry.site.toLowerCase().includes(query));
 
@@ -133,7 +207,7 @@ function render() {
     }
 
     filteredEntries.forEach((item, i) => {
-        const { entry, index } = item; // index is the original index in 'entries' array
+        const { entry, index } = item;
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td>${i + 1}</td>
@@ -149,11 +223,12 @@ function render() {
         tbody.appendChild(tr);
     });
 }
+
 function copyPass(i) {
     navigator.clipboard.writeText(entries[i].password);
     showMsg("Password copied!");
 }
-// Now protected with the same 3-question verification
+
 function verifyUserIdentity(actionName) {
     const dream = prompt("What is your biggest dream?");
     if (dream === null) {
@@ -184,8 +259,7 @@ function verifyUserIdentity(actionName) {
     }
 }
 
-// Now protected with the same 3-question verification
-function confirmNewPass(i) {
+async function confirmNewPass(i) {
     const service = entries[i].site;
     const firstConfirm = confirm(`Generate a new password for "${service}"?`);
     if (!firstConfirm) {
@@ -195,38 +269,20 @@ function confirmNewPass(i) {
 
     if (verifyUserIdentity("Action")) {
         const newPassword = generatePassword();
-        console.log(`Syncing new password for "${service}" to server via POST (value: 2)...`);
+        entries[i].password = newPassword;
+        entries[i].updatedAt = new Date().toISOString();
+        render();
 
-        const dataToSend = {
-            Service: service,
-            Password: newPassword,
-            value: 2
-        };
-
-        fetch('https://n8n.srv1268978.hstgr.cloud/webhook/3edea957-6b00-4595-97ef-825f79ae4d43', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(dataToSend)
-        })
-            .then(response => {
-                if (response.ok) {
-                    entries[i].password = newPassword;
-                    render();
-                    showMsg(`New password generated and synced for "${service}".`);
-                } else {
-                    throw new Error(`Update sync failed with status: ${response.status}`);
-                }
-            })
-            .catch(error => {
-                console.error("Error in New Password sync:", error);
-                showMsg(error.message || "Update sync error.");
-            });
+        const saved = await saveToCSV();
+        if (saved) {
+            showMsg(`New password generated and saved for "${service}".`);
+        } else {
+            showMsg(`New password generated for "${service}" but CSV save failed.`);
+        }
     }
 }
 
-function editSite(i) {
+async function editSite(i) {
     if (!confirm("Are you sure you want to edit this service name?")) return;
 
     if (!verifyUserIdentity("Edit Name")) {
@@ -236,43 +292,21 @@ function editSite(i) {
     const newName = prompt("Edit service name:", entries[i].site);
     if (newName && newName.trim()) {
         const trimmedName = newName.trim();
-        const currentPassword = entries[i].password;
+        entries[i].site = trimmedName;
+        entries[i].updatedAt = new Date().toISOString();
+        sortEntries();
 
-        console.log(`Syncing name change for "${trimmedName}" to server via POST (value: 2)...`);
-
-        const dataToSend = {
-            Service: trimmedName,
-            Password: currentPassword,
-            value: 2
-        };
-
-        fetch('https://n8n.srv1268978.hstgr.cloud/webhook/3edea957-6b00-4595-97ef-825f79ae4d43', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(dataToSend)
-        })
-            .then(response => {
-                if (response.ok) {
-                    entries[i].site = trimmedName;
-                    sortEntries();
-                    showMsg("Name updated and synced.");
-                } else {
-                    throw new Error(`Name update sync failed with status: ${response.status}`);
-                }
-            })
-            .catch(error => {
-                console.error("Error in Edit Name sync:", error);
-                showMsg(error.message || "Name update sync error.");
-            });
+        const saved = await saveToCSV();
+        if (saved) {
+            showMsg("Name updated and saved to CSV.");
+        } else {
+            showMsg("Name updated locally but CSV save failed.");
+        }
     }
 }
 
-// Delete remains the same (already protected)
-function confirmDelete(i) {
+async function confirmDelete(i) {
     const service = entries[i].site;
-    const password = entries[i].password; // Capture password for sync
     const firstConfirm = confirm(`Are you sure you want to permanently delete the password for "${service}"?`);
     if (!firstConfirm) {
         showMsg("Deletion canceled.");
@@ -280,40 +314,18 @@ function confirmDelete(i) {
     }
 
     if (verifyUserIdentity("Deletion")) {
-        console.log(`Syncing delete for "${service}" to server via POST (value: -2)...`);
+        entries.splice(i, 1);
+        render();
 
-        const dataToSend = {
-            Service: service,
-            Password: password,
-            value: -2
-        };
-
-        fetch('https://n8n.srv1268978.hstgr.cloud/webhook/3edea957-6b00-4595-97ef-825f79ae4d43', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(dataToSend)
-        })
-            .then(response => {
-                if (response.ok) {
-                    // Only remove locally if server sync is successful
-                    entries.splice(i, 1);
-                    render(); // render will re-apply filtered view
-                    showMsg(`"${service}" deleted successfully.`);
-                } else {
-                    throw new Error(`Delete sync failed with status: ${response.status}`);
-                }
-            })
-            .catch(error => {
-                console.error("Error in Delete sync:", error);
-                showMsg(error.message || "Delete sync error.");
-            });
+        const saved = await saveToCSV();
+        if (saved) {
+            showMsg(`"${service}" deleted and CSV updated.`);
+        } else {
+            showMsg(`"${service}" deleted locally but CSV save failed.`);
+        }
     }
 }
 
-// Export and Import logic exists, but UI buttons were removed.
-// The functions are maintained as per "persist functionality" request, but unused by UI.
 async function exportToCSV(useQuick = false) {
     if (!confirm("Are you sure you want to export passwords to CSV?")) return;
 
@@ -321,10 +333,7 @@ async function exportToCSV(useQuick = false) {
         alert("No passwords to export!");
         return;
     }
-    let csv = "Service,Password\n";
-    entries.forEach(e => {
-        csv += `"${e.site.replace(/"/g, '""')}","${e.password}"\n`;
-    });
+    const csv = entriesToCSV();
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     if (!useQuick && 'showSaveFilePicker' in window) {
         try {
@@ -361,19 +370,12 @@ function importFromCSV() {
     const reader = new FileReader();
     reader.onload = function (e) {
         const text = e.target.result;
-        const lines = text.split(/\r?\n/);
+        const parsed = parseCSV(text);
         let count = 0;
-        for (let i = 1; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
-            const parts = line.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
-            const site = (parts[0] || '').replace(/^"(.*)"$/, '$1').replace(/""/g, '"').trim();
-            const pass = (parts.slice(1).join(',') || '').replace(/^"(.*)"$/, '$1').replace(/""/g, '"').trim();
-            if (site && pass) {
-                entries.push({ site: site.trim(), password: pass });
-                count++;
-            }
-        }
+        parsed.forEach(item => {
+            entries.push(item);
+            count++;
+        });
         if (count > 0) {
             sortEntries();
         }
@@ -399,75 +401,30 @@ document.getElementById('siteInput').addEventListener('keypress', e => {
     if (e.key === 'Enter') addWithPassword();
 });
 
-function fetchAndRenderEntries() {
-    console.log("Fetching entries from server via POST (value: 1)...");
-    // Return the promise so other functions can chain off it
-    return fetch('https://n8n.srv1268978.hstgr.cloud/webhook/3edea957-6b00-4595-97ef-825f79ae4d43', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Cache-Control': 'no-store'
-        },
-        body: JSON.stringify({ value: 1 })
-    })
-        .then(response => {
-            console.log(`Fetch response status: ${response.status}`);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status} ${response.statusText}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            console.log("Data received from server:", data);
-            if (Array.isArray(data)) {
-                entries.length = 0;
-                data.forEach(item => {
-                    const service = item.Service || item.site || 'Unknown';
-                    const password = item.Password || item.password || '••••••••';
-
-                    let idValue = item.Index !== undefined ? Number(item.Index) :
-                        (item.id !== undefined ? Number(item.id) : undefined);
-
-                    entries.push({
-                        site: String(service).trim(),
-                        password: String(password),
-                        id: idValue
-                    });
-                });
-
-                sortEntries();
-                showMsg(`Successfully loaded ${entries.length} passwords!`);
-            } else {
-                console.warn("Received non-array data from server:", data);
-                showMsg("Server returned unexpected data format.");
-            }
-        }); // No .catch here, let the caller handle it for unified messaging
-}
-
-function enableAddButton() {
+async function enableAddButton() {
     console.log("Load button clicked.");
     if (verifyUserIdentity("Load")) {
-        console.log("Identity verified. Fetching entries first...");
+        console.log("Identity verified. Loading CSV...");
 
-        fetchAndRenderEntries()
-            .then(() => {
-                // ONLY enable button after successful fetch
-                const btn = document.getElementById('generateBtn');
-                if (btn) {
-                    btn.disabled = false;
-                    showMsg("Add button enabled!");
-                }
-                console.log("Entries fetched and rendered. Button enabled.");
-            })
-            .catch(error => {
-                console.error("Error during initial load:", error);
+        try {
+            await loadFromCSV();
+            const btn = document.getElementById('generateBtn');
+            if (btn) {
+                btn.disabled = false;
+                showMsg("Add button enabled!");
+            }
+            console.log("CSV loaded and rendered. Button enabled.");
+        } catch (error) {
+            console.error("Error during initial load:", error);
+            if (error.name !== 'AbortError') {
                 showMsg(`Load failed: ${error.message}`);
-                // Ensure button remains disabled on error
-                const btn = document.getElementById('generateBtn');
-                if (btn) btn.disabled = true;
-            });
+            }
+            const btn = document.getElementById('generateBtn');
+            if (btn) btn.disabled = true;
+        }
     }
 }
+
 // Disable the Generate & Add button on initial load
 const genBtn = document.getElementById('generateBtn');
 if (genBtn) {
