@@ -76,15 +76,53 @@ async function saveToCSV() {
 }
 
 async function loadFromCSV() {
-    const response = await fetch('passwords-export.csv', {
-        cache: 'no-store'
-    });
-    if (!response.ok) {
-        throw new Error(`Could not load CSV file (${response.status})`);
-    }
-    const text = await response.text();
-    const parsed = parseCSV(text);
+    let text = null;
 
+    // Try fetching from the same folder first
+    try {
+        const response = await fetch('passwords-export.csv', {
+            cache: 'no-store'
+        });
+        if (response.ok) {
+            text = await response.text();
+        }
+    } catch (e) {
+        console.log("Fetch not available, falling back to file picker.");
+    }
+
+    // Fallback: file picker (works on HTTPS / Railway)
+    if (!text) {
+        if ('showOpenFilePicker' in window) {
+            const [handle] = await window.showOpenFilePicker({
+                types: [{
+                    description: 'CSV File',
+                    accept: { 'text/csv': ['.csv'] },
+                }],
+                multiple: false
+            });
+            csvFileHandle = handle;
+            const file = await handle.getFile();
+            text = await file.text();
+        } else {
+            // Last resort: hidden file input
+            text = await new Promise((resolve, reject) => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.csv';
+                input.onchange = async () => {
+                    if (input.files.length > 0) {
+                        resolve(await input.files[0].text());
+                    } else {
+                        reject(new Error('No file selected'));
+                    }
+                };
+                input.oncancel = () => reject(new DOMException('User cancelled', 'AbortError'));
+                input.click();
+            });
+        }
+    }
+
+    const parsed = parseCSV(text);
     entries.length = 0;
     parsed.forEach(item => entries.push(item));
 
